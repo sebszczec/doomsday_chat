@@ -1,0 +1,7 @@
+Server commands
+  /help - prints this message
+  /quit - quits server
+  /name - change name
+  /names - list users in room
+  /join - join/create channel
+  /rooms - list available rooms
