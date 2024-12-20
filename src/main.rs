@@ -166,6 +166,21 @@ fn take_first_argument(command: &String) -> Result<&str, CommandError> {
     }
 }
 
+
+pub trait Connection {
+    fn handle(tcp: TcpStream) -> impl std::future::Future<Output = Result<bool, bool>> + Send;
+}
+
+pub struct ChatConnection {
+}
+
+impl Connection for ChatConnection {
+    async fn handle(_tcp: TcpStream) -> Result<bool, bool> {
+        info!("Success");
+        Ok(true)
+    }
+}
+
 struct TcpServer {
     server: TcpListener,
     names: Names,
@@ -197,9 +212,7 @@ impl TcpServer {
             tokio::spawn(TcpServer::handle_user(tcp,self.names.clone(), self.rooms.clone()));
         } 
     }
-}
 
-impl TcpServer {
     async fn handle_command(command: &String, tcp_context: &mut TcpContext<'_>, context: &mut ClientContext, rooms: Rooms, names: Names) -> Result<bool, CommandError> {
         if command.starts_with("/quit") {
             return Err(CommandError::Quit);
@@ -273,6 +286,8 @@ impl TcpServer {
         let mut tcp_context = TcpContext::new(&mut tcp);
         tcp_context.sink.send(HELP_MSG).await.unwrap();
 
+        
+
         let user_name = names.get_unique();
         let room_name = MAIN.to_owned();
 
@@ -330,6 +345,58 @@ impl TcpServer {
     }
 }
 
+pub trait Interface1 {
+    fn foo_bar(self);
+}
+
+struct Implementation1;
+impl Interface1 for Implementation1 {
+    fn foo_bar(self) {
+        info!("---> Success1 <---");
+    }
+}
+
+struct TestStruct1<T> {
+    t : T,
+}
+
+impl<T : Interface1> TestStruct1<T>
+{
+    fn new(a : T) -> Self {
+        Self { t : a}
+    }
+    fn test_bar(self) {
+        info!("---> Almost Success1 <---");
+        self.t.foo_bar();
+    }
+}
+
+pub trait Interface2 {
+    fn foo_bar();
+}
+
+struct Implementation2;
+impl Interface2 for Implementation2 {
+    fn foo_bar() {
+        info!("---> Success2 <---");
+    }
+}
+
+use std::marker::PhantomData;
+struct TestStruct2<T> {
+    phantom: PhantomData<T>,
+}
+
+impl<T : Interface2> TestStruct2<T>
+{
+    fn test_bar() {
+        info!("---> Almost Success2 <---");
+        T::foo_bar();
+    }
+}
+
+
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -338,6 +405,12 @@ async fn main() {
     error!("ERROR test");
     info!("INFO test");
     debug!("DEBUG test");
+
+    let test_impl = Implementation1;
+    let test_struct = TestStruct1::<Implementation1>::new(test_impl);
+    test_struct.test_bar();
+
+    TestStruct2::<Implementation2>::test_bar();
 
     let tcp_server = TcpServer::new("192.168.0.123:7878").await.unwrap();
     info!("Server started");
