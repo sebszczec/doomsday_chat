@@ -8,58 +8,10 @@ use futures::{SinkExt, StreamExt};
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use tokio::sync::broadcast::{Receiver, Sender};
 
+use crate::random_names::name_generator::Names;
+mod random_names;
+
 const HELP_MSG: &str = include_str!("help.txt");
-
-pub static ADJECTIVES: [&str; 6] = [
-    "Mushy",
-    "Starry",
-    "Peaceful",
-    "Phony",
-    "Amazing",
-    "Queasy",
-];
-
-pub static ANIMALS: [&str; 6] = [
-    "Owl",
-    "Mantis",
-    "Gopher",
-    "Robin",
-    "Vulture",
-    "Prawn",    
-];
-
-pub fn random_name() -> String {
-    let adjective = fastrand::choice(ADJECTIVES).unwrap();
-    let animal = fastrand::choice(ANIMALS).unwrap();
-
-    format!("{adjective}{animal}")
-}
-
-#[derive(Clone)]
-struct Names(Arc<Mutex<HashSet<String>>>);
-
-impl Names {
-    fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashSet::new())))
-    }
-
-    fn insert(&self, name: String) -> bool {
-        self.0.lock().unwrap().insert(name)
-    }
-
-    fn remove(&self, name: &String) {
-        self.0.lock().unwrap().remove(name);
-    }
-
-    fn get_unique(&self) -> String {
-        let mut name = random_name();
-        while !self.insert(name.clone()) {
-            name = random_name();
-        }
-
-        name
-    }
-}
 
 macro_rules! b {
     ($result:expr) => {
