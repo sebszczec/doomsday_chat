@@ -173,146 +173,162 @@ struct TcpServer {
 }
 
 impl TcpServer {
-    // async fn new(address: &str) -> anyhow::Result<Self> {
-    //     let instance = Self {
-    //         server: TcpListener::bind(address).await?,
-    //         names : Names::new(),
-    //         rooms : Rooms::new(),
-    //     };
+    async fn new(address: &str) -> Result<Self, String> {
+        let server = match TcpListener::bind(address).await {
+            Ok(value) => { value },
+            Err(e) => { 
+                error!("Cannot start server: {}", e.to_string());
+                return Err(String::from(format!("Cannot start server: {}", e.to_string())));
+            },
+        };
 
-    //     Ok(instance)
-    // }
+        Ok( Self {
+            server,
+            names : Names::new(),
+            rooms : Rooms::new(),
+        })
+    }
+
+    async fn start_loop(self) {
+        loop {
+            let (tcp, _) = self.server.accept().await.unwrap();
+            info!("Client connected");
+            
+            tokio::spawn(TcpServer::handle_user(tcp,self.names.clone(), self.rooms.clone()));
+        } 
+    }
 }
 
-async fn handle_command(command: &String, tcp_context: &mut TcpContext<'_>, context: &mut ClientContext, rooms: Rooms, names: Names) -> Result<bool, CommandError> {
-    if command.starts_with("/quit") {
-        return Err(CommandError::Quit);
+impl TcpServer {
+    async fn handle_command(command: &String, tcp_context: &mut TcpContext<'_>, context: &mut ClientContext, rooms: Rooms, names: Names) -> Result<bool, CommandError> {
+        if command.starts_with("/quit") {
+            return Err(CommandError::Quit);
+        }
+        else if command.starts_with("/help") {
+            tcp_context.sink.send(HELP_MSG).await.unwrap();
+        }
+        else if command.starts_with("/rooms") {
+            let rooms_list = rooms.list();
+            let rooms_list = rooms_list
+                .into_iter()
+                .map(|(name, count)| format!("{name} ({count})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            tcp_context.sink.send(format!("Rooms - {rooms_list}")).await.unwrap();
+        }
+        else if command.starts_with("/join") {
+            let new_room;
+            match take_first_argument(command) {
+                std::result::Result::Ok(value) => {
+                    new_room = value.to_owned();
+                },
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+
+            if new_room == context.room_name {
+                tcp_context.sink.send(format!("You already are in {}", context.room_name)).await.unwrap();
+                return Ok(true)
+            }
+
+            context.room_tx.send(format!("{} has left {}", context.name, context.room_name)).unwrap();
+            context.room_tx = rooms.change(&context.room_name, &new_room, &context.name);
+            context.room_rx = context.room_tx.subscribe();
+            context.room_name = new_room;
+            context.room_tx.send(format!("{} joined {}", context.name, context.room_name)).unwrap();
+        }
+        else if command.starts_with("/users") {
+            let users_list = rooms.list_users(&context.room_name).unwrap().join(", ");
+            tcp_context.sink.send(format!("Users - {users_list}")).await.unwrap();
+        }
+        else if command.starts_with("/name") {
+            let new_name;
+            match take_first_argument(command) {
+                std::result::Result::Ok(value) => {
+                    new_name = value.to_owned();
+                },
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+
+            let changed_name = names.insert(new_name.clone());
+            if changed_name {
+                context.room_tx.send(format!("{} is now {}", context.name, new_name)).unwrap();
+                names.remove(&context.name);
+                context.name = new_name;
+            } else {
+                tcp_context.sink.send(format!("{new_name} is already taken")).await.unwrap();
+            }
+        }
+        else {
+            return Err(CommandError::WrongCommand);
+        }
+
+        Ok(true)
     }
-    else if command.starts_with("/help") {
+
+    async fn handle_user(mut tcp: TcpStream, names: Names, rooms: Rooms) -> Result<bool, bool>{
+        let mut tcp_context = TcpContext::new(&mut tcp);
         tcp_context.sink.send(HELP_MSG).await.unwrap();
-    }
-    else if command.starts_with("/rooms") {
-        let rooms_list = rooms.list();
-        let rooms_list = rooms_list
-            .into_iter()
-            .map(|(name, count)| format!("{name} ({count})"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        tcp_context.sink.send(format!("Rooms - {rooms_list}")).await.unwrap();
-    }
-    else if command.starts_with("/join") {
-        let new_room;
-        match take_first_argument(command) {
-            std::result::Result::Ok(value) => {
-                new_room = value.to_owned();
-            },
-            Err(e) => {
-                return Err(e);
-            }
-        }
 
-        if new_room == context.room_name {
-            tcp_context.sink.send(format!("You already are in {}", context.room_name)).await.unwrap();
-            return Ok(true)
-        }
+        let user_name = names.get_unique();
+        let room_name = MAIN.to_owned();
 
-        context.room_tx.send(format!("{} has left {}", context.name, context.room_name)).unwrap();
-        context.room_tx = rooms.change(&context.room_name, &new_room, &context.name);
-        context.room_rx = context.room_tx.subscribe();
-        context.room_name = new_room;
-        context.room_tx.send(format!("{} joined {}", context.name, context.room_name)).unwrap();
-    }
-    else if command.starts_with("/users") {
-        let users_list = rooms.list_users(&context.room_name).unwrap().join(", ");
-        tcp_context.sink.send(format!("Users - {users_list}")).await.unwrap();
-    }
-    else if command.starts_with("/name") {
-        let new_name;
-        match take_first_argument(command) {
-            std::result::Result::Ok(value) => {
-                new_name = value.to_owned();
-            },
-            Err(e) => {
-                return Err(e);
-            }
-        }
+        let room_tx = rooms.join(&room_name, &user_name);
 
-        let changed_name = names.insert(new_name.clone());
-        if changed_name {
-            context.room_tx.send(format!("{} is now {}", context.name, new_name)).unwrap();
-            names.remove(&context.name);
-            context.name = new_name;
-        } else {
-            tcp_context.sink.send(format!("{new_name} is already taken")).await.unwrap();
-        }
-    }
-    else {
-        return Err(CommandError::WrongCommand);
-    }
+        let mut context = ClientContext::new(
+            user_name, 
+            room_name,
+            room_tx.clone(),
+            room_tx.subscribe());
+        tcp_context.sink.send(format!("Your name is {}", context.name)).await.unwrap();
+        
+        let _ = context.room_tx.send(format!("{} joined {}", context.name, context.room_name));
 
-    Ok(true)
-}
+        let result = loop {
+            tokio::select! {
+                user_msg = tcp_context.stream.next() => {
+                    let user_msg = match user_msg {
+                        Some(msg) => msg.unwrap(),
+                        None => { break Ok::<bool, bool>(true)},
+                    };
 
-async fn handle_user(mut tcp: TcpStream, names: Names, rooms: Rooms) -> Result<bool, bool>{
-    let mut tcp_context = TcpContext::new(&mut tcp);
-    tcp_context.sink.send(HELP_MSG).await.unwrap();
-
-    let user_name = names.get_unique();
-    let room_name = MAIN.to_owned();
-
-    let room_tx = rooms.join(&room_name, &user_name);
-
-    let mut context = ClientContext::new(
-        user_name, 
-        room_name,
-        room_tx.clone(),
-        room_tx.subscribe());
-    tcp_context.sink.send(format!("Your name is {}", context.name)).await.unwrap();
-    
-    let _ = context.room_tx.send(format!("{} joined {}", context.name, context.room_name));
-
-    let result = loop {
-        tokio::select! {
-            user_msg = tcp_context.stream.next() => {
-                let user_msg = match user_msg {
-                    Some(msg) => msg.unwrap(),
-                    None => { break Ok::<bool, bool>(true)},
-                };
-
-                if user_msg.starts_with("/") {
-                    match handle_command(&user_msg, &mut tcp_context, &mut context, rooms.clone(), names.clone()).await {
-                        std::result::Result::Ok(_) => { continue; },
-                        Err(e) => match e {
-                            CommandError::WrongCommand => { 
-                                tcp_context.sink.send(format!("Wrong command: {user_msg}")).await.unwrap();
-                                continue; 
+                    if user_msg.starts_with("/") {
+                        match TcpServer::handle_command(&user_msg, &mut tcp_context, &mut context, rooms.clone(), names.clone()).await {
+                            std::result::Result::Ok(_) => { continue; },
+                            Err(e) => match e {
+                                CommandError::WrongCommand => { 
+                                    tcp_context.sink.send(format!("Wrong command: {user_msg}")).await.unwrap();
+                                    continue; 
+                                },
+                                CommandError::Quit => { break Ok(true); },
+                                CommandError::NotEnoughArg => {
+                                    tcp_context.sink.send(format!("Command with wrong number of arguments: {user_msg}")).await.unwrap();
+                                    continue; 
+                                }
                             },
-                            CommandError::Quit => { break Ok(true); },
-                            CommandError::NotEnoughArg => {
-                                tcp_context.sink.send(format!("Command with wrong number of arguments: {user_msg}")).await.unwrap();
-                                continue; 
-                            }
-                        },
+                        }
                     }
-                }
-                else {
-                    let _ = context.room_tx.send(format!("{}: {}", context.name, user_msg));
-                }
-            },
-            peer_msg = context.room_rx.recv() => {
-                tcp_context.sink.send(peer_msg.unwrap()).await.unwrap();
-            },
-        }
-    };
-    
-    info!("Client disconnected");
-    let _ = context.room_tx.send(format!("{} has left {}", context.name, context.room_name));
-    rooms.leave(&context.room_name, &context.name);
-    names.remove(&context.name);
+                    else {
+                        let _ = context.room_tx.send(format!("{}: {}", context.name, user_msg));
+                    }
+                },
+                peer_msg = context.room_rx.recv() => {
+                    tcp_context.sink.send(peer_msg.unwrap()).await.unwrap();
+                },
+            }
+        };
+        
+        info!("Client disconnected");
+        let _ = context.room_tx.send(format!("{} has left {}", context.name, context.room_name));
+        rooms.leave(&context.room_name, &context.name);
+        names.remove(&context.name);
 
-    result
+        result
+    }
 }
-
 
 #[tokio::main]
 async fn main() {
@@ -323,18 +339,10 @@ async fn main() {
     info!("INFO test");
     debug!("DEBUG test");
 
-    let server = TcpListener::bind("192.168.0.123:7878").await.unwrap();
+    let tcp_server = TcpServer::new("192.168.0.123:7878").await.unwrap();
     info!("Server started");
 
-    let names = Names::new();
-    let rooms = Rooms::new();
-
-    loop {
-        let (tcp, _) = server.accept().await.unwrap();
-        info!("Client connected");
-        
-        tokio::spawn(handle_user(tcp, names.clone(), rooms.clone()));
-    }    
+    tcp_server.start_loop().await;
 }
 
 #[cfg(test)]
