@@ -181,13 +181,14 @@ impl Connection for ChatConnection {
     }
 }
 
-struct TcpServer {
+struct TcpServer<T> {
     server: TcpListener,
     names: Names,
     rooms: Rooms,
+    phantom : PhantomData<T>
 }
 
-impl TcpServer {
+impl<T : Connection + 'static> TcpServer<T> {
     async fn new(address: &str) -> Result<Self, String> {
         let server = match TcpListener::bind(address).await {
             Ok(value) => { value },
@@ -201,6 +202,7 @@ impl TcpServer {
             server,
             names : Names::new(),
             rooms : Rooms::new(),
+            phantom: PhantomData,
         })
     }
 
@@ -209,7 +211,7 @@ impl TcpServer {
             let (tcp, _) = self.server.accept().await.unwrap();
             info!("Client connected");
             
-            tokio::spawn(TcpServer::handle_user(tcp,self.names.clone(), self.rooms.clone()));
+            tokio::spawn(TcpServer::<T>::handle_user(tcp,self.names.clone(), self.rooms.clone()));
         } 
     }
 
@@ -311,7 +313,7 @@ impl TcpServer {
                     };
 
                     if user_msg.starts_with("/") {
-                        match TcpServer::handle_command(&user_msg, &mut tcp_context, &mut context, rooms.clone(), names.clone()).await {
+                        match TcpServer::<T>::handle_command(&user_msg, &mut tcp_context, &mut context, rooms.clone(), names.clone()).await {
                             std::result::Result::Ok(_) => { continue; },
                             Err(e) => match e {
                                 CommandError::WrongCommand => { 
@@ -412,7 +414,7 @@ async fn main() {
 
     TestStruct2::<Implementation2>::test_bar();
 
-    let tcp_server = TcpServer::new("192.168.0.123:7878").await.unwrap();
+    let tcp_server = TcpServer::<ChatConnection>::new("192.168.0.123:7878").await.unwrap();
     info!("Server started");
 
     tcp_server.start_loop().await;
