@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
-use std::sync::{RwLock};
+use std::sync::RwLock;
 use tokio::{net::{TcpListener, TcpStream}, sync::broadcast};
 use log::{info, debug, warn, error};
 use futures::{SinkExt, StreamExt};
@@ -168,51 +168,21 @@ fn take_first_argument(command: &String) -> Result<&str, CommandError> {
 
 
 pub trait Connection {
-    fn handle(tcp: TcpStream) -> impl std::future::Future<Output = Result<bool, bool>> + Send;
+    fn handle(self, tcp: TcpStream) -> impl std::future::Future<Output = Result<bool, bool>> + Send;
 }
 
+#[derive(Clone)]
 pub struct ChatConnection {
+    names : Names,
+    rooms : Rooms
 }
 
-impl Connection for ChatConnection {
-    async fn handle(_tcp: TcpStream) -> Result<bool, bool> {
-        info!("Success");
-        Ok(true)
-    }
-}
-
-struct TcpServer<T> {
-    server: TcpListener,
-    names: Names,
-    rooms: Rooms,
-    phantom : PhantomData<T>
-}
-
-impl<T : Connection + 'static> TcpServer<T> {
-    async fn new(address: &str) -> Result<Self, String> {
-        let server = match TcpListener::bind(address).await {
-            Ok(value) => { value },
-            Err(e) => { 
-                error!("Cannot start server: {}", e.to_string());
-                return Err(String::from(format!("Cannot start server: {}", e.to_string())));
-            },
-        };
-
-        Ok( Self {
-            server,
+impl ChatConnection {
+    fn new() -> Self {
+        Self {
             names : Names::new(),
-            rooms : Rooms::new(),
-            phantom: PhantomData,
-        })
-    }
-
-    async fn start_loop(self) {
-        loop {
-            let (tcp, _) = self.server.accept().await.unwrap();
-            info!("Client connected");
-            
-            tokio::spawn(TcpServer::<T>::handle_user(tcp,self.names.clone(), self.rooms.clone()));
-        } 
+            rooms : Rooms::new()
+        }
     }
 
     async fn handle_command(command: &String, tcp_context: &mut TcpContext<'_>, context: &mut ClientContext, rooms: Rooms, names: Names) -> Result<bool, CommandError> {
@@ -272,7 +242,12 @@ impl<T : Connection + 'static> TcpServer<T> {
             if changed_name {
                 context.room_tx.send(format!("{} is now {}", context.name, new_name)).unwrap();
                 names.remove(&context.name);
+
+                rooms.leave(&context.room_name, &context.name);
+                rooms.join(&context.room_name, new_name.as_str());
+
                 context.name = new_name;
+                
             } else {
                 tcp_context.sink.send(format!("{new_name} is already taken")).await.unwrap();
             }
@@ -284,16 +259,17 @@ impl<T : Connection + 'static> TcpServer<T> {
         Ok(true)
     }
 
-    async fn handle_user(mut tcp: TcpStream, names: Names, rooms: Rooms) -> Result<bool, bool>{
+}
+
+impl Connection for ChatConnection {
+    async fn handle(self, mut tcp: TcpStream) -> Result<bool, bool> {
         let mut tcp_context = TcpContext::new(&mut tcp);
         tcp_context.sink.send(HELP_MSG).await.unwrap();
 
-        
-
-        let user_name = names.get_unique();
+        let user_name = self.names.get_unique();
         let room_name = MAIN.to_owned();
 
-        let room_tx = rooms.join(&room_name, &user_name);
+        let room_tx = self.rooms.join(&room_name, &user_name);
 
         let mut context = ClientContext::new(
             user_name, 
@@ -313,7 +289,7 @@ impl<T : Connection + 'static> TcpServer<T> {
                     };
 
                     if user_msg.starts_with("/") {
-                        match TcpServer::<T>::handle_command(&user_msg, &mut tcp_context, &mut context, rooms.clone(), names.clone()).await {
+                        match Self::handle_command(&user_msg, &mut tcp_context, &mut context, self.rooms.clone(), self.names.clone()).await {
                             std::result::Result::Ok(_) => { continue; },
                             Err(e) => match e {
                                 CommandError::WrongCommand => { 
@@ -340,10 +316,42 @@ impl<T : Connection + 'static> TcpServer<T> {
         
         info!("Client disconnected");
         let _ = context.room_tx.send(format!("{} has left {}", context.name, context.room_name));
-        rooms.leave(&context.room_name, &context.name);
-        names.remove(&context.name);
+        self.rooms.leave(&context.room_name, &context.name);
+        self.names.remove(&context.name);
 
         result
+    }
+}
+
+struct TcpServer<T> {
+    server: TcpListener,
+    connection: T,
+}
+
+impl<T : Connection + 'static + Clone> TcpServer<T> {
+    async fn new(address: &str, connection: T) -> Result<Self, String> {
+        let server = match TcpListener::bind(address).await {
+            Ok(value) => { value },
+            Err(e) => { 
+                error!("Cannot start server: {}", e.to_string());
+                return Err(String::from(format!("Cannot start server: {}", e.to_string())));
+            },
+        };
+
+        Ok( Self {
+            server,
+            connection,
+        })
+    }
+
+    async fn start_loop(self) {
+        loop {
+            let (tcp, _) = self.server.accept().await.unwrap();
+            info!("Client connected");
+            
+            tokio::spawn(self.connection.clone().handle(tcp));
+            //tokio::spawn(TcpServer::<T>::handle_user(tcp,self.names.clone(), self.rooms.clone()));
+        } 
     }
 }
 
@@ -414,7 +422,7 @@ async fn main() {
 
     TestStruct2::<Implementation2>::test_bar();
 
-    let tcp_server = TcpServer::<ChatConnection>::new("192.168.0.123:7878").await.unwrap();
+    let tcp_server = TcpServer::new("192.168.0.123:7878", ChatConnection::new()).await.unwrap();
     info!("Server started");
 
     tcp_server.start_loop().await;
