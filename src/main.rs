@@ -1,14 +1,18 @@
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
 use std::sync::RwLock;
-use tokio::{net::{TcpListener, TcpStream}, sync::broadcast};
+use tokio::{net::TcpStream, sync::broadcast};
 use log::{info, debug, warn, error};
 use futures::{SinkExt, StreamExt};
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::random_names::name_generator::Names;
 mod random_names;
+use crate::random_names::name_generator::Names;
+
+mod tcp_server;
+use crate::tcp_server::server::TcpServer;
+use crate::tcp_server::server::Connection;
 
 const HELP_MSG: &str = include_str!("help.txt");
 
@@ -166,11 +170,6 @@ fn take_first_argument(command: &String) -> Result<&str, CommandError> {
     }
 }
 
-
-pub trait Connection {
-    fn handle(self, tcp: TcpStream) -> impl std::future::Future<Output = Result<bool, bool>> + Send;
-}
-
 #[derive(Clone)]
 pub struct ChatConnection {
     names : Names,
@@ -320,38 +319,6 @@ impl Connection for ChatConnection {
         self.names.remove(&context.name);
 
         result
-    }
-}
-
-struct TcpServer<T> {
-    server: TcpListener,
-    connection: T,
-}
-
-impl<T : Connection + 'static + Clone> TcpServer<T> {
-    async fn new(address: &str, connection: T) -> Result<Self, String> {
-        let server = match TcpListener::bind(address).await {
-            Ok(value) => { value },
-            Err(e) => { 
-                error!("Cannot start server: {}", e.to_string());
-                return Err(String::from(format!("Cannot start server: {}", e.to_string())));
-            },
-        };
-
-        Ok( Self {
-            server,
-            connection,
-        })
-    }
-
-    async fn start_loop(self) {
-        loop {
-            let (tcp, _) = self.server.accept().await.unwrap();
-            info!("Client connected");
-            
-            tokio::spawn(self.connection.clone().handle(tcp));
-            //tokio::spawn(TcpServer::<T>::handle_user(tcp,self.names.clone(), self.rooms.clone()));
-        } 
     }
 }
 
