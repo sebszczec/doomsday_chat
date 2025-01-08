@@ -1,4 +1,4 @@
-use std::{collections::{HashSet, HashMap}, sync::Arc};
+use std::{collections::{HashMap, HashSet}, sync::Arc, usize};
 use std::sync::{Mutex, RwLock};
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::sync::broadcast;
@@ -397,11 +397,11 @@ impl Connection for ChatConnection {
         result
     }
 
-    async fn setup_broadcast(self) -> Result<bool, bool> {
+    async fn setup_broadcast(self, duration: u64) -> Result<bool, bool> {
         info!("Preparing broadcast procedure");
 
         loop {
-            sleep(Duration::from_millis(5000)).await;
+            sleep(Duration::from_millis(duration)).await;
             let tx_list = self.rooms.list_tx();
 
             for tx in tx_list {

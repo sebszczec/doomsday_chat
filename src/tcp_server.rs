@@ -3,7 +3,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 pub trait Connection {
     fn handle(self, tcp: TcpStream) -> impl std::future::Future<Output = Result<bool, bool>> + Send;
-    fn setup_broadcast(self) -> impl std::future::Future<Output = Result<bool, bool>> + Send;
+    fn setup_broadcast(self, duration: u64) -> impl std::future::Future<Output = Result<bool, bool>> + Send;
 }
 
 pub struct TcpServer<T> {
@@ -30,7 +30,7 @@ impl<T : Connection + 'static + Clone> TcpServer<T> {
     }
 
     pub async fn start_loop(self) {
-        tokio::spawn(self.connection.clone().setup_broadcast());
+        tokio::spawn(self.connection.clone().setup_broadcast(5000));
         
         loop {
             let (tcp, _) = self.server.accept().await.unwrap();
