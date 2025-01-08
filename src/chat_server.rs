@@ -6,6 +6,8 @@ use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use log::info;
+use tokio::time::sleep;
+use std::time::Duration;
 
 use crate::tcp_server::Connection;
 
@@ -95,6 +97,21 @@ impl Rooms {
         room.tx.clone()
     }
 
+    #[allow(dead_code)]
+    fn get_tx(&self, room_name: &str) -> Option<Sender<String>>{
+        let read_guard = self.0.read().unwrap();
+        let room = read_guard.get(room_name);
+
+        match room {
+            None => {
+                return None;
+            },
+            Some(value) => {
+                Option::Some(value.tx.clone())
+            }
+        }
+    }
+
     fn leave(&self, room_name: &str, user_name: &str) {
         let mut write_guard = self.0.write().unwrap();
         let mut delete_room = false;
@@ -152,6 +169,19 @@ impl Rooms {
                 users
             })
     }
+
+    fn list_tx(&self) -> Vec<Sender<String>> {
+        self.0
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(_name, room)| {
+                // name.to_owned(),
+                room.tx.clone()
+            })
+            .collect()
+    }
+
 }
 
 struct TcpContext<'a> {
@@ -366,6 +396,24 @@ impl Connection for ChatConnection {
 
         result
     }
+
+    async fn setup_broadcast(self) -> Result<bool, bool> {
+        info!("Preparing broadcast procedure");
+
+        loop {
+            sleep(Duration::from_millis(5000)).await;
+            let tx_list = self.rooms.list_tx();
+
+            for tx in tx_list {
+                let result = tx.send(format!("Server: broadcast message!"));
+                match result {
+                    Ok(_) => {},
+                    Err(_) => { return Err(false) }
+                }
+            }
+        }
+    }
+
 }
 
 
@@ -399,6 +447,39 @@ mod tests {
             }
 
         }
+    }
+
+    #[test]
+    fn get_tx() {
+        let room_name = "Room";
+        let user_name = "User";
+
+        let rooms = Rooms::new();
+        rooms.join(room_name, user_name);
+
+        let tx = rooms.get_tx(room_name);
+        match tx {
+            None => { assert!(false); },
+            Some(_) => { assert!(true) },
+        }
+
+    }
+
+    #[test]
+    fn get_not_existing_tx() {
+        let room_name = "Room";
+        let user_name = "User";
+        let false_room = "Cat";
+
+        let rooms = Rooms::new();
+        rooms.join(room_name, user_name);
+
+        let tx = rooms.get_tx(false_room);
+        match tx {
+            None => { assert!(true); },
+            Some(_) => { assert!(false) },
+        }
+
     }
 
 }
