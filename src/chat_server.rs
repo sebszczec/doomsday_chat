@@ -397,11 +397,11 @@ impl Connection for ChatConnection {
         result
     }
 
-    async fn setup_broadcast(self, duration: u64) -> Result<bool, bool> {
+    async fn setup_broadcast(self) -> Result<bool, bool> {
         info!("Preparing broadcast procedure");
 
         loop {
-            sleep(Duration::from_millis(duration)).await;
+            sleep(Duration::from_millis(5000)).await;
             let tx_list = self.rooms.list_tx();
 
             for tx in tx_list {
@@ -412,6 +412,10 @@ impl Connection for ChatConnection {
                 }
             }
         }
+    }
+
+    fn get_name(&self) -> String {
+        String::from("ChatServer")
     }
 
 }
